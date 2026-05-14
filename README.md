@@ -22,4 +22,9 @@ curl -fsSL https://aka.ms/praestoclaw/install.sh | bash
 - [latest.txt](latest.txt) — current published version
 - `dist/` — version-pinned wheel and sdist archives
 
-Generated manually from gim-home/PraestoClaw commit 7de2dd9617820b497d543ffeef9033d2a6bbe8ca with package version 1.1.5.
+Generated automatically from the private
+[gim-home/PraestoClaw](https://github.com/gim-home/PraestoClaw)
+repository — **do not edit files here directly**, they will be
+overwritten on the next sync.
+
+Landing site: https://gim-home.github.io/PraestoClaw/
