@@ -289,6 +289,36 @@ if (-not $Package) {
     $Package = "$MirrorBase/dist/praestoclaw-$latest-py3-none-any.whl"
 }
 
+# Build list of packages to install in a single pip invocation. The
+# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol` with
+# no version pin and no source URL, so pip would otherwise try PyPI and
+# fail (the protocol package is private to this workspace and only
+# published to the public mirror). Passing both wheels to pip in one go
+# satisfies the dep locally.
+#
+# When PRAESTOCLAW_PACKAGE is overridden (dev / local-wheel testing) we
+# still pull the protocol wheel from the mirror unless the caller also
+# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE.
+$DepsPackage = $env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE
+if (-not $DepsPackage) {
+    if (-not $latest) {
+        # PRAESTOCLAW_PACKAGE was set so we never resolved latest — fetch now.
+        try {
+            $bust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            $latest = (Invoke-WebRequest -Uri "$MirrorBase/latest.txt?t=$bust" -UseBasicParsing).Content.Trim()
+        } catch {}
+    }
+    if ($latest -match '^\d+\.\d+(\.\d+)?') {
+        $DepsPackage = "$MirrorBase/dist/agent_gateway_protocol-$latest-py3-none-any.whl"
+    } else {
+        Write-Warn "Could not resolve agent_gateway_protocol wheel URL — pip will try PyPI and likely fail."
+        Write-Host "   Override with `$env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
+    }
+}
+$InstallTargets = @()
+if ($DepsPackage) { $InstallTargets += $DepsPackage }
+$InstallTargets += $Package
+
 # --- Step 3: Stop running PraestoClaw processes (only after confirming update needed) ---
 Write-Step "Stopping running PraestoClaw processes ..."
 Stop-PraestoClawProcesses
@@ -315,10 +345,10 @@ function Run-PipSilent([string[]]$PipArgs) {
     return @{ Code = $code; Err = $errText }
 }
 
-$r = Run-PipSilent @("-m","pip","install","--upgrade","--force-reinstall",$Package)
+$r = Run-PipSilent (@("-m","pip","install","--upgrade","--force-reinstall") + $InstallTargets)
 if ($r.Code -ne 0) {
     Write-Warn "Standard install failed. Retrying with --user ..."
-    $r = Run-PipSilent @("-m","pip","install","--upgrade","--force-reinstall","--user",$Package)
+    $r = Run-PipSilent (@("-m","pip","install","--upgrade","--force-reinstall","--user") + $InstallTargets)
     if ($r.Code -ne 0) {
         Write-Fail "pip install failed:"
         if ($r.Err) { Write-Host $r.Err -ForegroundColor Red }

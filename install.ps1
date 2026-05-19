@@ -212,16 +212,44 @@ if (-not $Package) {
         exit 1
     }
 }
+
+# Build list of packages to install in a single pip invocation. The
+# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol` with
+# no version pin and no source URL, so pip would otherwise try PyPI and
+# fail (the protocol package is private to this workspace and only
+# published to the public mirror). Passing both wheels to pip in one go
+# satisfies the dep locally.
+#
+# When PRAESTOCLAW_PACKAGE is overridden (dev / local-wheel testing) we
+# still pull the protocol wheel from the mirror unless the caller also
+# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE.
+$DepsPackage = $env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE
+if (-not $DepsPackage) {
+    try {
+        $bust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $ver  = (Invoke-WebRequest -Uri "$MirrorBase/latest.txt?t=$bust" -UseBasicParsing).Content.Trim()
+        if ($ver -match '^\d+\.\d+(\.\d+)?') {
+            $DepsPackage = "$MirrorBase/dist/agent_gateway_protocol-$ver-py3-none-any.whl"
+        }
+    } catch {
+        Write-Warn "Could not resolve agent_gateway_protocol wheel URL — pip will try PyPI and likely fail."
+        Write-Host "   Override with `$env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
+    }
+}
+$InstallTargets = @()
+if ($DepsPackage) { $InstallTargets += $DepsPackage }
+$InstallTargets += $Package
+
 Write-Step "Installing / upgrading from $Package ..."
 
 # --force-reinstall ensures the wheel is always re-downloaded and reinstalled,
 # even when the version string matches what's already on disk — necessary
 # because the mirror rebuilds wheels under time-stamped versions and pip
 # otherwise skips same-version URLs as "already satisfied".
-$out = & $pyCmd @pyPrefix -m pip install --upgrade --force-reinstall $Package 2>&1
+$out = & $pyCmd @pyPrefix -m pip install --upgrade --force-reinstall @InstallTargets 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Warn "Standard install failed. Retrying with --user ..."
-    $out = & $pyCmd @pyPrefix -m pip install --upgrade --force-reinstall --user $Package 2>&1
+    $out = & $pyCmd @pyPrefix -m pip install --upgrade --force-reinstall --user @InstallTargets 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "pip install failed:"
         Write-Host ($out | Out-String) -ForegroundColor Red

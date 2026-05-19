@@ -189,24 +189,60 @@ fi
 ok "$("$PYTHON_CMD" -m pip --version 2>&1)"
 
 # ── 3. Install / upgrade PraestoClaw ──────────────────────────────────────────
+_resolved_ver=""
 if [ -z "$PACKAGE" ]; then
     step "Resolving latest PraestoClaw version ..."
     # Cache-buster bypasses GitHub Raw's 5-minute CDN TTL.
     _bust=$(date +%s)
     if has_cmd curl; then
-        _ver=$(curl -fsSL "$MIRROR_BASE/latest.txt?t=$_bust" | tr -d '[:space:]')
+        _resolved_ver=$(curl -fsSL "$MIRROR_BASE/latest.txt?t=$_bust" | tr -d '[:space:]')
     elif has_cmd wget; then
-        _ver=$(wget -qO- "$MIRROR_BASE/latest.txt?t=$_bust" | tr -d '[:space:]')
+        _resolved_ver=$(wget -qO- "$MIRROR_BASE/latest.txt?t=$_bust" | tr -d '[:space:]')
     else
         fail "Neither curl nor wget is available to resolve latest version."
     fi
-    if ! [[ "$_ver" =~ ^[0-9]+\.[0-9]+ ]]; then
-        fail "latest.txt did not contain a valid version: '$_ver'
+    if ! [[ "$_resolved_ver" =~ ^[0-9]+\.[0-9]+ ]]; then
+        fail "latest.txt did not contain a valid version: '$_resolved_ver'
   Override with PRAESTOCLAW_PACKAGE=<wheel URL or local path>"
     fi
-    PACKAGE="$MIRROR_BASE/dist/praestoclaw-${_ver}-py3-none-any.whl"
-    ok "Latest version: $_ver"
+    PACKAGE="$MIRROR_BASE/dist/praestoclaw-${_resolved_ver}-py3-none-any.whl"
+    ok "Latest version: $_resolved_ver"
 fi
+
+# Build list of packages to install in a single pip invocation. The
+# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol` with
+# no version pin and no source URL, so pip would otherwise try PyPI and
+# fail (the protocol package is private to this workspace and only
+# published to the public mirror). Passing both wheels to pip in one go
+# satisfies the dep locally.
+#
+# When PRAESTOCLAW_PACKAGE is overridden (dev / local-wheel testing) we
+# still pull the protocol wheel from the mirror unless the caller also
+# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE.
+DEPS_PACKAGE="${PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE:-}"
+if [ -z "$DEPS_PACKAGE" ]; then
+    if [ -z "$_resolved_ver" ]; then
+        # PRAESTOCLAW_PACKAGE was set (override path), but we still need the
+        # protocol version — best effort fetch latest.txt.
+        _bust=$(date +%s)
+        if has_cmd curl; then
+            _resolved_ver=$(curl -fsSL "$MIRROR_BASE/latest.txt?t=$_bust" | tr -d '[:space:]')
+        elif has_cmd wget; then
+            _resolved_ver=$(wget -qO- "$MIRROR_BASE/latest.txt?t=$_bust" | tr -d '[:space:]')
+        fi
+    fi
+    if [[ "$_resolved_ver" =~ ^[0-9]+\.[0-9]+ ]]; then
+        DEPS_PACKAGE="$MIRROR_BASE/dist/agent_gateway_protocol-${_resolved_ver}-py3-none-any.whl"
+    else
+        warn "Could not resolve agent_gateway_protocol wheel URL — pip will try PyPI and likely fail."
+        warn "Override with PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE=<wheel URL or path>"
+    fi
+fi
+
+INSTALL_TARGETS=()
+[ -n "$DEPS_PACKAGE" ] && INSTALL_TARGETS+=("$DEPS_PACKAGE")
+INSTALL_TARGETS+=("$PACKAGE")
+
 step "Installing / upgrading from $PACKAGE ..."
 
 # --force-reinstall so pip always re-downloads the wheel; without it pip
@@ -214,21 +250,21 @@ step "Installing / upgrading from $PACKAGE ..."
 # install has the same post-release version, and new fixes never roll out.
 PIP_FLAGS=(--upgrade --force-reinstall)
 
-if "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" "$PACKAGE" 2>/dev/null; then
+if "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" "${INSTALL_TARGETS[@]}" 2>/dev/null; then
     ok "$PACKAGE installed."
-elif "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" --user "$PACKAGE" 2>/dev/null; then
+elif "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" --user "${INSTALL_TARGETS[@]}" 2>/dev/null; then
     ok "$PACKAGE installed (--user)."
-elif "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" --break-system-packages "$PACKAGE" 2>/dev/null; then
+elif "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" --break-system-packages "${INSTALL_TARGETS[@]}" 2>/dev/null; then
     # PEP 668: Ubuntu 24.04+ / Debian 12+ mark the system Python as externally managed.
     # --break-system-packages is safe here because we are installing a user application.
     ok "$PACKAGE installed (--break-system-packages)."
 else
-    pip_out=$("$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" "$PACKAGE" 2>&1) || {
+    pip_out=$("$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" "${INSTALL_TARGETS[@]}" 2>&1) || {
         printf '%s\n' "$pip_out"
         fail "pip install failed.
   Common fixes:
     - Corporate proxy: export HTTPS_PROXY=http://proxy:port
-    - Manual: $PYTHON_CMD -m pip install --upgrade --force-reinstall $PACKAGE"
+    - Manual: $PYTHON_CMD -m pip install --upgrade --force-reinstall ${INSTALL_TARGETS[*]}"
     }
     ok "$PACKAGE installed."
 fi

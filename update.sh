@@ -190,6 +190,39 @@ if [[ -z "$PACKAGE" ]]; then
     PACKAGE="$MIRROR_BASE/dist/praestoclaw-${latest}-py3-none-any.whl"
 fi
 
+# Build list of packages to install in a single pip invocation. The
+# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol` with
+# no version pin and no source URL, so pip would otherwise try PyPI and
+# fail (the protocol package is private to this workspace and only
+# published to the public mirror). Passing both wheels to pip in one go
+# satisfies the dep locally.
+#
+# When PRAESTOCLAW_PACKAGE is overridden (dev / local-wheel testing) we
+# still pull the protocol wheel from the mirror unless the caller also
+# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE.
+DEPS_PACKAGE="${PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE:-}"
+if [ -z "$DEPS_PACKAGE" ]; then
+    if [ -z "$latest" ]; then
+        # PRAESTOCLAW_PACKAGE was set so we never resolved latest — fetch now.
+        _bust=$(date +%s)
+        if has_cmd curl; then
+            latest=$(curl -fsSL "$MIRROR_BASE/latest.txt?t=$_bust" | tr -d '[:space:]')
+        elif has_cmd wget; then
+            latest=$(wget -qO- "$MIRROR_BASE/latest.txt?t=$_bust" | tr -d '[:space:]')
+        fi
+    fi
+    if [[ "$latest" =~ ^[0-9]+\.[0-9]+ ]]; then
+        DEPS_PACKAGE="$MIRROR_BASE/dist/agent_gateway_protocol-${latest}-py3-none-any.whl"
+    else
+        warn "Could not resolve agent_gateway_protocol wheel URL — pip will try PyPI and likely fail."
+        warn "Override with PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE=<wheel URL or path>"
+    fi
+fi
+
+INSTALL_TARGETS=()
+[ -n "$DEPS_PACKAGE" ] && INSTALL_TARGETS+=("$DEPS_PACKAGE")
+INSTALL_TARGETS+=("$PACKAGE")
+
 # --- Step 3: Stop running PraestoClaw processes (only after confirming update needed) ---
 step "Stopping running PraestoClaw processes ..."
 stop_praestoclaw_processes
@@ -199,19 +232,19 @@ step "Upgrading to v${latest:-latest} ..."
 
 PIP_FLAGS=(--upgrade --force-reinstall)
 
-if "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" "$PACKAGE" >/dev/null 2>&1; then
+if "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" "${INSTALL_TARGETS[@]}" >/dev/null 2>&1; then
     ok "Upgrade complete."
-elif "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" --user "$PACKAGE" >/dev/null 2>&1; then
+elif "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" --user "${INSTALL_TARGETS[@]}" >/dev/null 2>&1; then
     ok "Upgrade complete (--user)."
-elif "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" --break-system-packages "$PACKAGE" >/dev/null 2>&1; then
+elif "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" --break-system-packages "${INSTALL_TARGETS[@]}" >/dev/null 2>&1; then
     ok "Upgrade complete (--break-system-packages)."
 else
-    pip_out=$("$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" "$PACKAGE" 2>&1) || {
+    pip_out=$("$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" "${INSTALL_TARGETS[@]}" 2>&1) || {
         printf '%s\n' "$pip_out"
         fail "pip install failed.
   Common fixes:
     - Corporate proxy: export HTTPS_PROXY=http://proxy:port
-    - Manual: $PYTHON_CMD -m pip install --upgrade --force-reinstall $PACKAGE"
+    - Manual: $PYTHON_CMD -m pip install --upgrade --force-reinstall ${INSTALL_TARGETS[*]}"
     }
     ok "Upgrade complete."
 fi
