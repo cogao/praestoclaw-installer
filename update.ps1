@@ -375,6 +375,13 @@ if (Get-Command praestoclaw -ErrorAction SilentlyContinue) {
     Write-Step "Running post-update config ..."
     & praestoclaw init --quick 2>&1 | ForEach-Object { Write-Host "   $_" }
 
+    # Idempotent — see 'praestoclaw teams install --help'.
+    Write-Step "Checking Teams app version ..."
+    & praestoclaw teams install --quiet --no-open-teams --if-installed 2>&1 | ForEach-Object { Write-Host "   $_" }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Teams version check did not complete — re-run with: praestoclaw teams install"
+    }
+
     Write-Step "Starting PraestoClaw ..."
     Write-Host "   Press Ctrl+C in this window to stop the server." -ForegroundColor DarkGray
     Write-Host ""

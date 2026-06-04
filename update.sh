@@ -267,6 +267,11 @@ if has_cmd praestoclaw; then
     step "Running post-update config ..."
     praestoclaw init --quick 2>&1 | sed 's/^/   /' || true
 
+    # Idempotent — see 'praestoclaw teams install --help'.
+    step "Checking Teams app version ..."
+    praestoclaw teams install --quiet --no-open-teams --if-installed 2>&1 | sed 's/^/   /' || \
+        warn "Teams version check did not complete — re-run with: praestoclaw teams install"
+
     step "Starting PraestoClaw ..."
     echo "   Press Ctrl+C in this window to stop the server."
     echo ""
