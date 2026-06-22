@@ -300,14 +300,15 @@ if (-not $Package) {
 # still pull the protocol wheel from the mirror unless the caller also
 # overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE.
 $DepsPackage = $env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE
+$TelemetryPackage = $env:PRAESTO_TELEMETRY_PACKAGE
+if ((-not $DepsPackage -or -not $TelemetryPackage) -and -not $latest) {
+    # PRAESTOCLAW_PACKAGE was set so we never resolved latest — fetch now.
+    try {
+        $bust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $latest = (Invoke-WebRequest -Uri "$MirrorBase/latest.txt?t=$bust" -UseBasicParsing).Content.Trim()
+    } catch {}
+}
 if (-not $DepsPackage) {
-    if (-not $latest) {
-        # PRAESTOCLAW_PACKAGE was set so we never resolved latest — fetch now.
-        try {
-            $bust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-            $latest = (Invoke-WebRequest -Uri "$MirrorBase/latest.txt?t=$bust" -UseBasicParsing).Content.Trim()
-        } catch {}
-    }
     if ($latest -match '^\d+\.\d+(\.\d+)?') {
         $DepsPackage = "$MirrorBase/dist/agent_gateway_protocol-$latest-py3-none-any.whl"
     } else {
@@ -315,8 +316,17 @@ if (-not $DepsPackage) {
         Write-Host "   Override with `$env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
     }
 }
+if (-not $TelemetryPackage) {
+    if ($latest -match '^\d+\.\d+(\.\d+)?') {
+        $TelemetryPackage = "$MirrorBase/dist/praesto_telemetry-$latest-py3-none-any.whl"
+    } else {
+        Write-Warn "Could not resolve praesto_telemetry wheel URL — pip will try PyPI and likely fail."
+        Write-Host "   Override with `$env:PRAESTO_TELEMETRY_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
+    }
+}
 $InstallTargets = @()
 if ($DepsPackage) { $InstallTargets += $DepsPackage }
+if ($TelemetryPackage) { $InstallTargets += $TelemetryPackage }
 $InstallTargets += $Package
 
 # --- Step 3: Stop running PraestoClaw processes (only after confirming update needed) ---

@@ -219,8 +219,21 @@ if [ -z "$DEPS_PACKAGE" ]; then
     fi
 fi
 
+# Same rationale for praesto-telemetry: the praestoclaw wheel declares
+# `Requires-Dist: praesto-telemetry` with no source, so we point pip at
+# the mirror-hosted wheel.
+TELEMETRY_PACKAGE="${PRAESTO_TELEMETRY_PACKAGE:-}"
+if [ -z "$TELEMETRY_PACKAGE" ] && [[ "$latest" =~ ^[0-9]+\.[0-9]+ ]]; then
+    TELEMETRY_PACKAGE="$MIRROR_BASE/dist/praesto_telemetry-${latest}-py3-none-any.whl"
+fi
+if [ -z "$TELEMETRY_PACKAGE" ]; then
+    warn "Could not resolve praesto_telemetry wheel URL — pip will try PyPI and likely fail."
+    warn "Override with PRAESTO_TELEMETRY_PACKAGE=<wheel URL or path>"
+fi
+
 INSTALL_TARGETS=()
 [ -n "$DEPS_PACKAGE" ] && INSTALL_TARGETS+=("$DEPS_PACKAGE")
+[ -n "$TELEMETRY_PACKAGE" ] && INSTALL_TARGETS+=("$TELEMETRY_PACKAGE")
 INSTALL_TARGETS+=("$PACKAGE")
 
 # --- Step 3: Stop running PraestoClaw processes (only after confirming update needed) ---

@@ -214,30 +214,45 @@ if (-not $Package) {
 }
 
 # Build list of packages to install in a single pip invocation. The
-# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol` with
-# no version pin and no source URL, so pip would otherwise try PyPI and
-# fail (the protocol package is private to this workspace and only
-# published to the public mirror). Passing both wheels to pip in one go
-# satisfies the dep locally.
+# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol` and
+# `Requires-Dist: praesto-telemetry` with no version pin and no source
+# URL, so pip would otherwise try PyPI and fail (these packages are
+# private to this workspace and only published to the public mirror).
+# Passing all wheels to pip in one go satisfies the deps locally.
 #
 # When PRAESTOCLAW_PACKAGE is overridden (dev / local-wheel testing) we
-# still pull the protocol wheel from the mirror unless the caller also
-# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE.
+# still pull the dep wheels from the mirror unless the caller also
+# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE / PRAESTO_TELEMETRY_PACKAGE.
 $DepsPackage = $env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE
-if (-not $DepsPackage) {
+$TelemetryPackage = $env:PRAESTO_TELEMETRY_PACKAGE
+$ver = $null
+if (-not $DepsPackage -or -not $TelemetryPackage) {
     try {
         $bust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         $ver  = (Invoke-WebRequest -Uri "$MirrorBase/latest.txt?t=$bust" -UseBasicParsing).Content.Trim()
-        if ($ver -match '^\d+\.\d+(\.\d+)?') {
-            $DepsPackage = "$MirrorBase/dist/agent_gateway_protocol-$ver-py3-none-any.whl"
-        }
     } catch {
+        Write-Warn "Could not fetch latest.txt to resolve dep wheel URLs — pip will try PyPI and likely fail."
+    }
+}
+if (-not $DepsPackage) {
+    if ($ver -match '^\d+\.\d+(\.\d+)?') {
+        $DepsPackage = "$MirrorBase/dist/agent_gateway_protocol-$ver-py3-none-any.whl"
+    } else {
         Write-Warn "Could not resolve agent_gateway_protocol wheel URL — pip will try PyPI and likely fail."
         Write-Host "   Override with `$env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
     }
 }
+if (-not $TelemetryPackage) {
+    if ($ver -match '^\d+\.\d+(\.\d+)?') {
+        $TelemetryPackage = "$MirrorBase/dist/praesto_telemetry-$ver-py3-none-any.whl"
+    } else {
+        Write-Warn "Could not resolve praesto_telemetry wheel URL — pip will try PyPI and likely fail."
+        Write-Host "   Override with `$env:PRAESTO_TELEMETRY_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
+    }
+}
 $InstallTargets = @()
 if ($DepsPackage) { $InstallTargets += $DepsPackage }
+if ($TelemetryPackage) { $InstallTargets += $TelemetryPackage }
 $InstallTargets += $Package
 
 Write-Step "Installing / upgrading from $Package ..."
