@@ -281,6 +281,15 @@ if (-not $Package) {
             Write-Host ""
             Write-Host "   Already up to date! (current: v$currentVersion, latest: v$latest)" -ForegroundColor Green
             Write-Host ""
+            if ($env:PRAESTOCLAW_ENSURE_RUNNING -eq "1") {
+                # Bot self-update path: the daemon was already stopped before
+                # this script ran. There is nothing to install, but we must
+                # restart the server or the bot stays offline.
+                Write-Step "Starting PraestoClaw ..."
+                Write-Host "   Press Ctrl+C in this window to stop the server." -ForegroundColor DarkGray
+                Write-Host ""
+                & praestoclaw s
+            }
             exit 0
         }
         Write-Host "   Update available: v$currentVersion -> v$latest" -ForegroundColor Cyan
@@ -290,18 +299,21 @@ if (-not $Package) {
 }
 
 # Build list of packages to install in a single pip invocation. The
-# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol` with
-# no version pin and no source URL, so pip would otherwise try PyPI and
-# fail (the protocol package is private to this workspace and only
-# published to the public mirror). Passing both wheels to pip in one go
-# satisfies the dep locally.
+# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol`,
+# `Requires-Dist: praesto-telemetry`, and `Requires-Dist: os-sandbox`
+# with no version pin and no source URL, so pip would otherwise try
+# PyPI and fail (these packages are private to this workspace and only
+# published to the public mirror). Passing all wheels to pip in one go
+# satisfies the deps locally.
 #
 # When PRAESTOCLAW_PACKAGE is overridden (dev / local-wheel testing) we
-# still pull the protocol wheel from the mirror unless the caller also
-# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE.
+# still pull the dep wheels from the mirror unless the caller also
+# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE / PRAESTO_TELEMETRY_PACKAGE /
+# OS_SANDBOX_PACKAGE.
 $DepsPackage = $env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE
 $TelemetryPackage = $env:PRAESTO_TELEMETRY_PACKAGE
-if ((-not $DepsPackage -or -not $TelemetryPackage) -and -not $latest) {
+$SandboxPackage = $env:OS_SANDBOX_PACKAGE
+if ((-not $DepsPackage -or -not $TelemetryPackage -or -not $SandboxPackage) -and -not $latest) {
     # PRAESTOCLAW_PACKAGE was set so we never resolved latest — fetch now.
     try {
         $bust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -324,9 +336,18 @@ if (-not $TelemetryPackage) {
         Write-Host "   Override with `$env:PRAESTO_TELEMETRY_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
     }
 }
+if (-not $SandboxPackage) {
+    if ($latest -match '^\d+\.\d+(\.\d+)?') {
+        $SandboxPackage = "$MirrorBase/dist/os_sandbox-$latest-py3-none-any.whl"
+    } else {
+        Write-Warn "Could not resolve os_sandbox wheel URL — pip will try PyPI and likely fail."
+        Write-Host "   Override with `$env:OS_SANDBOX_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
+    }
+}
 $InstallTargets = @()
 if ($DepsPackage) { $InstallTargets += $DepsPackage }
 if ($TelemetryPackage) { $InstallTargets += $TelemetryPackage }
+if ($SandboxPackage) { $InstallTargets += $SandboxPackage }
 $InstallTargets += $Package
 
 # --- Step 3: Stop running PraestoClaw processes (only after confirming update needed) ---

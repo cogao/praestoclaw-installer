@@ -214,19 +214,22 @@ if (-not $Package) {
 }
 
 # Build list of packages to install in a single pip invocation. The
-# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol` and
-# `Requires-Dist: praesto-telemetry` with no version pin and no source
-# URL, so pip would otherwise try PyPI and fail (these packages are
-# private to this workspace and only published to the public mirror).
-# Passing all wheels to pip in one go satisfies the deps locally.
+# praestoclaw wheel declares `Requires-Dist: agent-gateway-protocol`,
+# `Requires-Dist: praesto-telemetry`, and `Requires-Dist: os-sandbox`
+# with no version pin and no source URL, so pip would otherwise try
+# PyPI and fail (these packages are private to this workspace and only
+# published to the public mirror). Passing all wheels to pip in one go
+# satisfies the deps locally.
 #
 # When PRAESTOCLAW_PACKAGE is overridden (dev / local-wheel testing) we
 # still pull the dep wheels from the mirror unless the caller also
-# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE / PRAESTO_TELEMETRY_PACKAGE.
+# overrides PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE / PRAESTO_TELEMETRY_PACKAGE /
+# OS_SANDBOX_PACKAGE.
 $DepsPackage = $env:PRAESTOCLAW_GATEWAY_PROTOCOL_PACKAGE
 $TelemetryPackage = $env:PRAESTO_TELEMETRY_PACKAGE
+$SandboxPackage = $env:OS_SANDBOX_PACKAGE
 $ver = $null
-if (-not $DepsPackage -or -not $TelemetryPackage) {
+if (-not $DepsPackage -or -not $TelemetryPackage -or -not $SandboxPackage) {
     try {
         $bust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         $ver  = (Invoke-WebRequest -Uri "$MirrorBase/latest.txt?t=$bust" -UseBasicParsing).Content.Trim()
@@ -250,9 +253,18 @@ if (-not $TelemetryPackage) {
         Write-Host "   Override with `$env:PRAESTO_TELEMETRY_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
     }
 }
+if (-not $SandboxPackage) {
+    if ($ver -match '^\d+\.\d+(\.\d+)?') {
+        $SandboxPackage = "$MirrorBase/dist/os_sandbox-$ver-py3-none-any.whl"
+    } else {
+        Write-Warn "Could not resolve os_sandbox wheel URL — pip will try PyPI and likely fail."
+        Write-Host "   Override with `$env:OS_SANDBOX_PACKAGE = '<wheel URL or path>'" -ForegroundColor Yellow
+    }
+}
 $InstallTargets = @()
 if ($DepsPackage) { $InstallTargets += $DepsPackage }
 if ($TelemetryPackage) { $InstallTargets += $TelemetryPackage }
+if ($SandboxPackage) { $InstallTargets += $SandboxPackage }
 $InstallTargets += $Package
 
 Write-Step "Installing / upgrading from $Package ..."

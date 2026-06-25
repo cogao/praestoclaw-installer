@@ -182,6 +182,15 @@ if [[ -z "$PACKAGE" ]]; then
             echo ""
             echo "   Already up to date! (current: v$current_version, latest: v$latest)"
             echo ""
+            if [ "${PRAESTOCLAW_ENSURE_RUNNING:-}" = "1" ]; then
+                # Bot self-update path: the daemon was already stopped before
+                # this script ran. Nothing to install, but we must restart the
+                # server or the bot stays offline.
+                step "Starting PraestoClaw ..."
+                echo "   Press Ctrl+C in this window to stop the server."
+                echo ""
+                exec praestoclaw s
+            fi
             exit 0
         fi
         echo "   Update available: v$current_version -> v$latest"
@@ -231,9 +240,22 @@ if [ -z "$TELEMETRY_PACKAGE" ]; then
     warn "Override with PRAESTO_TELEMETRY_PACKAGE=<wheel URL or path>"
 fi
 
+# Same rationale for os-sandbox: the praestoclaw wheel declares
+# `Requires-Dist: os-sandbox` with no source, so we point pip at
+# the mirror-hosted wheel.
+SANDBOX_PACKAGE="${OS_SANDBOX_PACKAGE:-}"
+if [ -z "$SANDBOX_PACKAGE" ] && [[ "$latest" =~ ^[0-9]+\.[0-9]+ ]]; then
+    SANDBOX_PACKAGE="$MIRROR_BASE/dist/os_sandbox-${latest}-py3-none-any.whl"
+fi
+if [ -z "$SANDBOX_PACKAGE" ]; then
+    warn "Could not resolve os_sandbox wheel URL — pip will try PyPI and likely fail."
+    warn "Override with OS_SANDBOX_PACKAGE=<wheel URL or path>"
+fi
+
 INSTALL_TARGETS=()
 [ -n "$DEPS_PACKAGE" ] && INSTALL_TARGETS+=("$DEPS_PACKAGE")
 [ -n "$TELEMETRY_PACKAGE" ] && INSTALL_TARGETS+=("$TELEMETRY_PACKAGE")
+[ -n "$SANDBOX_PACKAGE" ] && INSTALL_TARGETS+=("$SANDBOX_PACKAGE")
 INSTALL_TARGETS+=("$PACKAGE")
 
 # --- Step 3: Stop running PraestoClaw processes (only after confirming update needed) ---

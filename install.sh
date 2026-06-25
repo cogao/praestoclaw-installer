@@ -251,9 +251,22 @@ if [ -z "$TELEMETRY_PACKAGE" ]; then
     warn "Override with PRAESTO_TELEMETRY_PACKAGE=<wheel URL or path>"
 fi
 
+# Same rationale for os-sandbox: the praestoclaw wheel declares
+# `Requires-Dist: os-sandbox` with no source, so we point pip at
+# the mirror-hosted wheel.
+SANDBOX_PACKAGE="${OS_SANDBOX_PACKAGE:-}"
+if [ -z "$SANDBOX_PACKAGE" ] && [[ "$_resolved_ver" =~ ^[0-9]+\.[0-9]+ ]]; then
+    SANDBOX_PACKAGE="$MIRROR_BASE/dist/os_sandbox-${_resolved_ver}-py3-none-any.whl"
+fi
+if [ -z "$SANDBOX_PACKAGE" ]; then
+    warn "Could not resolve os_sandbox wheel URL — pip will try PyPI and likely fail."
+    warn "Override with OS_SANDBOX_PACKAGE=<wheel URL or path>"
+fi
+
 INSTALL_TARGETS=()
 [ -n "$DEPS_PACKAGE" ] && INSTALL_TARGETS+=("$DEPS_PACKAGE")
 [ -n "$TELEMETRY_PACKAGE" ] && INSTALL_TARGETS+=("$TELEMETRY_PACKAGE")
+[ -n "$SANDBOX_PACKAGE" ] && INSTALL_TARGETS+=("$SANDBOX_PACKAGE")
 INSTALL_TARGETS+=("$PACKAGE")
 
 step "Installing / upgrading from $PACKAGE ..."
