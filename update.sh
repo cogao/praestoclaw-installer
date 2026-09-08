@@ -16,12 +16,20 @@ set -uo pipefail   # -e intentionally omitted: handle errors explicitly
 
 MIRROR_BASE="https://raw.githubusercontent.com/cogao/praestoclaw-installer/main"
 PACKAGE="${PRAESTOCLAW_PACKAGE:-}"
+RESTART_REQUIRED="${PRAESTOCLAW_ENSURE_RUNNING:-0}"
+STOPPED_COUNT=0
+PC_LAUNCHER=(praestoclaw)
+PRAESTOCLAW_DATA_DIR="${PRAESTOCLAW_DATA_DIR:-$HOME/.praestoclaw}"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 step()  { printf '\n\033[36m>> %s\033[0m\n' "$*"; }
 ok()    { printf '   \033[32mOK: %s\033[0m\n' "$*"; }
 warn()  { printf '   \033[33mWARNING: %s\033[0m\n' "$*"; }
-fail()  { printf '   \033[31mFAILED: %s\033[0m\n' "$*"; exit 1; }
+fail()  {
+    printf '   \033[31mFAILED: %s\033[0m\n' "$*"
+    [[ "$RESTART_REQUIRED" = "1" ]] && start_praestoclaw_best_effort
+    exit 1
+}
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -124,8 +132,15 @@ stop_praestoclaw_processes() {
     if [[ "$killed" -eq 0 ]]; then
         ok "No running PraestoClaw processes found."
     else
+        STOPPED_COUNT=$killed
         sleep 1
     fi
+}
+
+start_praestoclaw_best_effort() {
+    step "Starting PraestoClaw ..."
+    "${PC_LAUNCHER[@]}" s --data-dir "$PRAESTOCLAW_DATA_DIR" &
+    disown 2>/dev/null || true
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -158,6 +173,17 @@ done
 [[ -z "$PYTHON_CMD" ]] && fail "Python not found on PATH."
 ok "Python: $($PYTHON_CMD --version 2>&1)"
 
+if [[ -n "${PRAESTOCLAW_LAUNCHER:-}" ]]; then
+    if parsed_launcher=$(PRAESTOCLAW_LAUNCHER="$PRAESTOCLAW_LAUNCHER" "$PYTHON_CMD" -c \
+        'import json, os; p=json.loads(os.environ["PRAESTOCLAW_LAUNCHER"]); assert isinstance(p, list) and p and all(isinstance(v, str) and v and "\n" not in v for v in p); print(*p, sep="\n")' \
+        2>/dev/null); then
+        PC_LAUNCHER=()
+        while IFS= read -r launcher_part; do
+            PC_LAUNCHER+=("$launcher_part")
+        done <<< "$parsed_launcher"
+    fi
+fi
+
 # --- Step 2: Resolve latest version and compare ---
 latest=""
 if [[ -z "$PACKAGE" ]]; then
@@ -186,10 +212,7 @@ if [[ -z "$PACKAGE" ]]; then
                 # Bot self-update path: the daemon was already stopped before
                 # this script ran. Nothing to install, but we must restart the
                 # server or the bot stays offline.
-                step "Starting PraestoClaw ..."
-                echo "   Press Ctrl+C in this window to stop the server."
-                echo ""
-                exec praestoclaw s
+                start_praestoclaw_best_effort
             fi
             exit 0
         fi
@@ -260,7 +283,16 @@ INSTALL_TARGETS+=("$PACKAGE")
 
 # --- Step 3: Stop running PraestoClaw processes (only after confirming update needed) ---
 step "Stopping running PraestoClaw processes ..."
-stop_praestoclaw_processes
+"${PC_LAUNCHER[@]}" watchdog-stop --data-dir "$PRAESTOCLAW_DATA_DIR"
+watchdog_rc=$?
+if [[ "$watchdog_rc" -eq 0 ]]; then
+    RESTART_REQUIRED=1
+elif [[ "$watchdog_rc" -eq 2 || "$watchdog_rc" -eq 3 ]]; then
+    stop_praestoclaw_processes
+    [[ "$STOPPED_COUNT" -gt 0 ]] && RESTART_REQUIRED=1
+else
+    exit "$watchdog_rc"
+fi
 
 # --- Step 4: Upgrade via pip ---
 step "Upgrading to v${latest:-latest} ..."
@@ -276,10 +308,12 @@ elif "$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" --break-system-packages "${I
 else
     pip_out=$("$PYTHON_CMD" -m pip install "${PIP_FLAGS[@]}" "${INSTALL_TARGETS[@]}" 2>&1) || {
         printf '%s\n' "$pip_out"
-        fail "pip install failed.
+        printf '   \033[31mFAILED: %s\033[0m\n' "pip install failed.
   Common fixes:
     - Corporate proxy: export HTTPS_PROXY=http://proxy:port
     - Manual: $PYTHON_CMD -m pip install --upgrade --force-reinstall ${INSTALL_TARGETS[*]}"
+        [[ "$RESTART_REQUIRED" = "1" ]] && start_praestoclaw_best_effort
+        exit 1
     }
     ok "Upgrade complete."
 fi
@@ -300,19 +334,17 @@ echo ""
 
 if has_cmd praestoclaw; then
     step "Running post-update config ..."
-    praestoclaw init --quick 2>&1 | sed 's/^/   /' || true
+    "${PC_LAUNCHER[@]}" init --quick 2>&1 | sed 's/^/   /' || true
 
     # Idempotent — see 'praestoclaw teams install --help'.
     step "Checking Teams app version ..."
-    praestoclaw teams install --quiet --no-open-teams --if-installed 2>&1 | sed 's/^/   /' || \
+    "${PC_LAUNCHER[@]}" teams install --quiet --no-open-teams --if-installed 2>&1 | sed 's/^/   /' || \
         warn "Teams version check did not complete — re-run with: praestoclaw teams install"
 
-    step "Starting PraestoClaw ..."
-    echo "   Press Ctrl+C in this window to stop the server."
-    echo ""
-    exec praestoclaw s
 else
     echo "  Restart your terminal, then run:"
     echo "    praestoclaw s"
     echo ""
 fi
+
+[[ "$RESTART_REQUIRED" = "1" ]] && start_praestoclaw_best_effort

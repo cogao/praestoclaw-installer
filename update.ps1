@@ -32,6 +32,14 @@ try {
 
 $MirrorBase = "https://raw.githubusercontent.com/cogao/praestoclaw-installer/main"
 $Package    = $env:PRAESTOCLAW_PACKAGE  # may be $null; resolved below
+$RestartRequired = ($env:PRAESTOCLAW_ENSURE_RUNNING -eq "1")
+$StoppedCount = 0
+$PcLauncher = @("praestoclaw")
+if ($env:PRAESTOCLAW_LAUNCHER) {
+    try { $PcLauncher = @($env:PRAESTOCLAW_LAUNCHER | ConvertFrom-Json) } catch {}
+}
+$PcDataDir = if ($env:PRAESTOCLAW_DATA_DIR) { $env:PRAESTOCLAW_DATA_DIR } else { Join-Path $HOME ".praestoclaw" }
+$env:PRAESTOCLAW_DATA_DIR = $PcDataDir
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -39,6 +47,24 @@ function Write-Step { param([string]$m) Write-Host "" ; Write-Host ">> $m" -Fore
 function Write-Ok   { param([string]$m) Write-Host "   OK: $m" -ForegroundColor Green }
 function Write-Warn { param([string]$m) Write-Host "   WARNING: $m" -ForegroundColor Yellow }
 function Write-Fail { param([string]$m) Write-Host "   FAILED: $m" -ForegroundColor Red }
+
+function Invoke-Pc {
+    param([string[]]$Arguments)
+    $exe = $PcLauncher[0]
+    $prefix = @($PcLauncher | Select-Object -Skip 1)
+    & $exe @prefix @Arguments
+}
+
+function Start-PraestoClawBestEffort {
+    Write-Step "Starting PraestoClaw ..."
+    $exe = $PcLauncher[0]
+    $arguments = @($PcLauncher | Select-Object -Skip 1) + @("s")
+    try {
+        Start-Process -FilePath $exe -ArgumentList $arguments -NoNewWindow | Out-Null
+    } catch {
+        Write-Warn "Could not start PraestoClaw: $_"
+    }
+}
 
 function Refresh-Path {
     $m = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -187,6 +213,8 @@ function Stop-PraestoClawProcesses {
         return
     }
 
+    $script:StoppedCount = $targets.Count
+
     Write-Host "   Stopping $($targets.Count) PraestoClaw process(es) ..." -ForegroundColor Yellow
     foreach ($t in $targets) {
         try {
@@ -285,10 +313,7 @@ if (-not $Package) {
                 # Bot self-update path: the daemon was already stopped before
                 # this script ran. There is nothing to install, but we must
                 # restart the server or the bot stays offline.
-                Write-Step "Starting PraestoClaw ..."
-                Write-Host "   Press Ctrl+C in this window to stop the server." -ForegroundColor DarkGray
-                Write-Host ""
-                & praestoclaw s
+                Start-PraestoClawBestEffort
             }
             exit 0
         }
@@ -352,7 +377,17 @@ $InstallTargets += $Package
 
 # --- Step 3: Stop running PraestoClaw processes (only after confirming update needed) ---
 Write-Step "Stopping running PraestoClaw processes ..."
-Stop-PraestoClawProcesses
+$stopOutput = Invoke-Pc @("watchdog-stop", "--data-dir", $PcDataDir) 2>&1
+$watchdogRc = $LASTEXITCODE
+if ($watchdogRc -eq 0) {
+    $RestartRequired = $true
+} elseif ($watchdogRc -eq 2 -or $watchdogRc -eq 3) {
+    Stop-PraestoClawProcesses
+    if ($StoppedCount -gt 0) { $RestartRequired = $true }
+} else {
+    $stopOutput | ForEach-Object { Write-Host "   $_" }
+    exit $watchdogRc
+}
 
 # --- Step 4: Upgrade via pip ---
 Write-Step "Upgrading to v$latest ..."
@@ -383,6 +418,7 @@ if ($r.Code -ne 0) {
     if ($r.Code -ne 0) {
         Write-Fail "pip install failed:"
         if ($r.Err) { Write-Host $r.Err -ForegroundColor Red }
+        if ($RestartRequired) { Start-PraestoClawBestEffort }
         exit 1
     }
 }
@@ -404,21 +440,19 @@ Write-Host ""
 
 if (Get-Command praestoclaw -ErrorAction SilentlyContinue) {
     Write-Step "Running post-update config ..."
-    & praestoclaw init --quick 2>&1 | ForEach-Object { Write-Host "   $_" }
+    Invoke-Pc @("init", "--quick") 2>&1 | ForEach-Object { Write-Host "   $_" }
 
     # Idempotent — see 'praestoclaw teams install --help'.
     Write-Step "Checking Teams app version ..."
-    & praestoclaw teams install --quiet --no-open-teams --if-installed 2>&1 | ForEach-Object { Write-Host "   $_" }
+    Invoke-Pc @("teams", "install", "--quiet", "--no-open-teams", "--if-installed") 2>&1 | ForEach-Object { Write-Host "   $_" }
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "Teams version check did not complete — re-run with: praestoclaw teams install"
     }
 
-    Write-Step "Starting PraestoClaw ..."
-    Write-Host "   Press Ctrl+C in this window to stop the server." -ForegroundColor DarkGray
-    Write-Host ""
-    & praestoclaw s
 } else {
     Write-Host "  Restart your terminal, then run:" -ForegroundColor Cyan
     Write-Host "    praestoclaw s" -ForegroundColor White
     Write-Host ""
 }
+
+if ($RestartRequired) { Start-PraestoClawBestEffort }
