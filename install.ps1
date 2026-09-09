@@ -267,6 +267,11 @@ if ($TelemetryPackage) { $InstallTargets += $TelemetryPackage }
 if ($SandboxPackage) { $InstallTargets += $SandboxPackage }
 $InstallTargets += $Package
 
+if (Get-Command praestoclaw -ErrorAction SilentlyContinue) {
+    Write-Step "Stopping running PraestoClaw ..."
+    & praestoclaw watchdog-stop
+}
+
 Write-Step "Installing / upgrading from $Package ..."
 
 # --force-reinstall ensures the wheel is always re-downloaded and reinstalled,
@@ -368,7 +373,7 @@ Write-Host ""
 
 # ── One-click finishing touch ───────────────────────────────────────────────
 # Set PRAESTOCLAW_SKIP_POST_INSTALL=1 to skip the automatic config + Teams
-# install + server launch, and exit right after CLI is on PATH.
+# install and exit right after CLI is on PATH.
 $skipPost = $env:PRAESTOCLAW_SKIP_POST_INSTALL -eq '1'
 
 if ((Get-Command praestoclaw -ErrorAction SilentlyContinue) -and (-not $skipPost)) {
@@ -399,14 +404,9 @@ if ((Get-Command praestoclaw -ErrorAction SilentlyContinue) -and (-not $skipPost
         Write-Warn "Teams sideload did not complete. You can retry anytime with: praestoclaw teams install"
     }
 
-    Write-Step "Starting PraestoClaw ..."
-    Write-Host "   Press Ctrl+C in this window to stop the server." -ForegroundColor DarkGray
     Write-Host ""
-    # ``praestoclaw`` (no subcommand) only prints a banner — call ``s``
-    # (alias for ``serve``) so the local web + cloud channels actually come
-    # up. Without this the Teams bot sees "agent offline" because nothing
-    # is connected back to the gateway.
-    & praestoclaw s
+    Write-Host "  To start PraestoClaw:" -ForegroundColor Cyan
+    Write-Host "    praestoclaw s" -ForegroundColor White
 
 } elseif (Get-Command praestoclaw -ErrorAction SilentlyContinue) {
     Write-Host "  Skipped post-install (PRAESTOCLAW_SKIP_POST_INSTALL=1)." -ForegroundColor DarkGray

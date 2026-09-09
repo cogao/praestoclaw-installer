@@ -269,6 +269,11 @@ INSTALL_TARGETS=()
 [ -n "$SANDBOX_PACKAGE" ] && INSTALL_TARGETS+=("$SANDBOX_PACKAGE")
 INSTALL_TARGETS+=("$PACKAGE")
 
+if has_cmd praestoclaw; then
+    step "Stopping running PraestoClaw ..."
+    praestoclaw watchdog-stop || true
+fi
+
 step "Installing / upgrading from $PACKAGE ..."
 
 # --force-reinstall so pip always re-downloads the wheel; without it pip
@@ -385,7 +390,7 @@ echo ""
 
 # ── One-click finishing touch ─────────────────────────────────────────────
 # Set PRAESTOCLAW_SKIP_POST_INSTALL=1 to skip the automatic config + Teams
-# install + server launch, and exit right after CLI is on PATH.
+# install and exit right after CLI is on PATH.
 if has_cmd praestoclaw && [ "${PRAESTOCLAW_SKIP_POST_INSTALL:-0}" != "1" ]; then
 
     step "Creating default config ..."
@@ -398,14 +403,9 @@ if has_cmd praestoclaw && [ "${PRAESTOCLAW_SKIP_POST_INSTALL:-0}" != "1" ]; then
     # would get "already installed" and never receive manifest updates.
     praestoclaw teams install --force || warn "Teams sideload did not complete. You can retry anytime with: praestoclaw teams install"
 
-    step "Starting PraestoClaw ..."
-    echo "   Press Ctrl+C in this window to stop the server."
     echo ""
-    # ``praestoclaw`` (no subcommand) only prints a banner — call ``s``
-    # (alias for ``serve``) so the local web + cloud channels actually come
-    # up. Without this the Teams bot sees "agent offline" because nothing
-    # is connected back to the gateway.
-    exec praestoclaw s
+    echo "  To start PraestoClaw:"
+    echo "    praestoclaw s"
 
 elif has_cmd praestoclaw; then
     echo "  Skipped post-install (PRAESTOCLAW_SKIP_POST_INSTALL=1)."
