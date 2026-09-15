@@ -268,8 +268,40 @@ if ($SandboxPackage) { $InstallTargets += $SandboxPackage }
 $InstallTargets += $Package
 
 if (Get-Command praestoclaw -ErrorAction SilentlyContinue) {
-    Write-Step "Stopping running PraestoClaw ..."
-    & praestoclaw watchdog-stop
+    Write-Step "Stopping running PraestoClaw watchdog ..."
+    $stopOutput = & praestoclaw watchdog-stop 2>&1
+    $watchdogRc = $LASTEXITCODE
+    # 2: CLI without this command; 3: no watchdog running.
+    if ($watchdogRc -notin @(0, 2, 3)) {
+        Write-Fail ($stopOutput | Out-String)
+        exit $watchdogRc
+    }
+
+    # Windows terminates the watchdog without running its child cleanup.
+    # Best-effort stop of the recorded agent so its launcher releases the installed exe.
+    $dataDir = if ($env:PRAESTOCLAW_DATA_DIR) { $env:PRAESTOCLAW_DATA_DIR } else { Join-Path $HOME ".praestoclaw" }
+    $pidFile = Join-Path $dataDir "web.pid"
+    try {
+        if (Test-Path -LiteralPath $pidFile) {
+            $agentPid = [int](Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json).pid
+            if ($agentPid -gt 0) {
+                $agent = Get-CimInstance Win32_Process -Filter "ProcessId = $agentPid" -ErrorAction Stop
+                if ($agent.Name -match '^(python[\d.w]*|praestoclaw|pc)\.exe$' -and
+                    $agent.CommandLine -match '(?:^|[\\/\s"])(?:praestoclaw|pc)(?:\.exe)?"?\s+(?:agent-serve|serve|s)(?:\s|$)') {
+                    $agentProcess = Get-Process -Id $agentPid -ErrorAction SilentlyContinue
+                    if ($agentProcess) {
+                        Stop-Process -InputObject $agentProcess -Force -ErrorAction Stop
+                        if (-not $agentProcess.WaitForExit(5000)) {
+                            Write-Warn "PraestoClaw agent did not exit within 5 seconds; continuing installation."
+                        }
+                        Start-Sleep -Seconds 2
+                    }
+                }
+            }
+        }
+    } catch {
+        Write-Warn "Could not stop the running PraestoClaw agent; continuing installation: $_"
+    }
 }
 
 Write-Step "Installing / upgrading from $Package ..."
@@ -373,7 +405,7 @@ Write-Host ""
 
 # ── One-click finishing touch ───────────────────────────────────────────────
 # Set PRAESTOCLAW_SKIP_POST_INSTALL=1 to skip the automatic config + Teams
-# install and exit right after CLI is on PATH.
+# install + server launch, and exit right after CLI is on PATH.
 $skipPost = $env:PRAESTOCLAW_SKIP_POST_INSTALL -eq '1'
 
 if ((Get-Command praestoclaw -ErrorAction SilentlyContinue) -and (-not $skipPost)) {
@@ -404,9 +436,14 @@ if ((Get-Command praestoclaw -ErrorAction SilentlyContinue) -and (-not $skipPost
         Write-Warn "Teams sideload did not complete. You can retry anytime with: praestoclaw teams install"
     }
 
+    Write-Step "Starting PraestoClaw ..."
+    Write-Host "   Press Ctrl+C in this window to stop the server." -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  To start PraestoClaw:" -ForegroundColor Cyan
-    Write-Host "    praestoclaw s" -ForegroundColor White
+    # ``praestoclaw`` (no subcommand) only prints a banner — call ``s``
+    # (alias for ``serve``) so the local web + cloud channels actually come
+    # up. Without this the Teams bot sees "agent offline" because nothing
+    # is connected back to the gateway.
+    & praestoclaw s
 
 } elseif (Get-Command praestoclaw -ErrorAction SilentlyContinue) {
     Write-Host "  Skipped post-install (PRAESTOCLAW_SKIP_POST_INSTALL=1)." -ForegroundColor DarkGray
